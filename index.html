@@ -264,7 +264,69 @@
             font-weight: 600;
             margin-top: 8px;
         }
-        .stat-card.stat-warning {
+        .quick-nav {
+            display: none;
+            gap: 10px;
+            margin-bottom: 22px;
+            flex-wrap: wrap;
+        }
+        .quick-nav a {
+            text-decoration: none;
+            background: #fff;
+            color: #2d3748;
+            padding: 9px 18px;
+            border-radius: 999px;
+            font-size: 14px;
+            font-weight: 600;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+            border: 2px solid #e2e8f0;
+            transition: all 0.2s ease;
+        }
+        .quick-nav a:hover {
+            border-color: #2b6cb0;
+            color: #2b6cb0;
+        }
+        .quick-nav a.bank-link:hover {
+            border-color: #dd6b20;
+            color: #c05621;
+        }
+        .section-block {
+            margin-bottom: 10px;
+        }
+        .section-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 14px 22px;
+            border-radius: 12px;
+            margin-bottom: 18px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .section-title .desc {
+            font-size: 13px;
+            font-weight: 400;
+            opacity: 0.85;
+            margin-top: 2px;
+        }
+        .section-title.theme-confirmed {
+            background: #ebf8ff;
+            color: #1a365d;
+            border-right: 6px solid #2b6cb0;
+        }
+        .section-title.theme-bank {
+            background: #fffaf0;
+            color: #7b341e;
+            border-right: 6px solid #dd6b20;
+        }
+        .section-divider {
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #e2e8f0, transparent);
+            margin: 36px 0;
+            border: none;
+        }
             border-right-color: #dd6b20;
         }
         .stat-card.stat-warning .value {
