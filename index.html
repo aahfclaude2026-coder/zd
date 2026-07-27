@@ -527,6 +527,7 @@
             <div class="header-actions">
                 <button class="btn btn-outline" id="btnExportAll" disabled>📄 تصدير الكل</button>
                 <button class="btn btn-outline" id="btnExportCurrent" disabled>📄 تصدير المحدد</button>
+                <button class="btn btn-outline" id="btnExportBank" disabled>🏦 تصدير التحويلات البنكية</button>
             </div>
         </div>
 
@@ -548,7 +549,8 @@
             <div class="stat-card"><div class="label">الطلبات المؤكدة</div><div class="value" id="statOrders">0</div></div>
             <div class="stat-card"><div class="label">الكميات المؤكدة</div><div class="value" id="statQuantity">0</div></div>
             <div class="stat-card"><div class="label">المبيعات المؤكدة (ر.س)</div><div class="value" id="statRevenue">0</div></div>
-            <div class="stat-card stat-warning" id="statBankCard"><div class="label">حوالات بنكية (غير محتسبة - تُفرز يدوياً)</div><div class="value" id="statBank">0</div></div>
+            <div class="stat-card stat-warning" id="statBankPaidCard"><div class="label">حوالات بنكية بمبلغ مؤكد (غير محتسبة بالمبيعات)</div><div class="value" id="statBankPaid">0</div></div>
+            <div class="stat-card stat-warning" id="statBankNoAmountCard"><div class="label">حوالات بنكية بدون مبلغ (لم يُرفع إثبات الدفع)</div><div class="value" id="statBankNoAmount">0</div></div>
         </div>
 
         <div class="search-section" id="searchSection" style="display:none;">
@@ -596,6 +598,37 @@
             </div>
         </div>
 
+        <div class="detail-section" id="bankSection">
+            <div class="detail-header">
+                <div>
+                    <div class="title">🏦 سجل التحويلات البنكية <span style="font-size:14px; font-weight:400; color:#dd6b20;">(مستبعدة من المبيعات المؤكدة - تحتاج تأكيد يدوي)</span></div>
+                    <div class="sub-info" id="bankSub">عدد التحويلات: 0 | بمبلغ مؤكد: 0 | بدون مبلغ: 0</div>
+                </div>
+                <button class="btn btn-success" id="btnExportBank2">📄 تصدير التحويلات البنكية</button>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>حالة المبلغ</th>
+                            <th>اسم العميل</th>
+                            <th>البريد الإلكتروني</th>
+                            <th>الجوال</th>
+                            <th>رقم الطلب</th>
+                            <th>التاريخ</th>
+                            <th>البرنامج / المنتج المسجّل فيه</th>
+                            <th>الكمية</th>
+                            <th>قيمة الطلب (ر.س)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bankBody">
+                        <tr><td colspan="10" style="text-align:center; color:#a0aec0;">لا توجد تحويلات بنكية بعد. ارفع الملف أولاً.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <div id="pdf-content"></div>
     </div>
 
@@ -613,7 +646,13 @@
             const statOrders = document.getElementById('statOrders');
             const statQuantity = document.getElementById('statQuantity');
             const statRevenue = document.getElementById('statRevenue');
-            const statBank = document.getElementById('statBank');
+            const statBankPaid = document.getElementById('statBankPaid');
+            const statBankNoAmount = document.getElementById('statBankNoAmount');
+            const bankSection = document.getElementById('bankSection');
+            const bankSub = document.getElementById('bankSub');
+            const bankBody = document.getElementById('bankBody');
+            const btnExportBank = document.getElementById('btnExportBank');
+            const btnExportBank2 = document.getElementById('btnExportBank2');
             const searchSection = document.getElementById('searchSection');
             const searchInput = document.getElementById('searchInput');
             const searchHint = document.getElementById('searchHint');
@@ -634,6 +673,8 @@
             let productsMap = {};
             let currentSku = null;
             let bankTransferOrderCount = 0;
+            let confirmedOrderCount = 0; // عدد الطلبات الفريدة المؤكدة (وليس عدد سطور المنتجات)
+            let bankTransferOrders = []; // كل طلبات "تحويل بنكي" كاملة (لعرضها في سجل منفصل)
 
             // ========== Helpers ==========
             function formatCurrency(v) {
@@ -696,6 +737,13 @@
             // داخل زد (يحتاج تأكيد يدوي من كشف الحساب البنكي). كل ما عداه (مثل zidpay) يُحتسب.
             function isBankTransfer(order) {
                 return safeStr(order.paymentMethod) === 'تحويل بنكي';
+            }
+
+            // بعض طلبات "تحويل بنكي" تُنشأ في زد لكن ما ورد لها مبلغ مدفوع مؤكد بعد
+            // (Paid Amount = 0)، أي أن العميل ما رفع إثبات الحوالة أو ما تأكد الدفع إدارياً.
+            // نفصلها عن التحويلات المؤكد استلام مبلغها لتكون الفلترة اليدوية أدق.
+            function hasConfirmedAmount(order) {
+                return (Number(order.paidAmount) || 0) > 0;
             }
 
             // ========== Parse Excel ==========
@@ -794,11 +842,15 @@
             function buildProductsFromOrders(orders) {
                 const map = {};
                 let bankCount = 0;
+                let confirmedCount = 0;
+                const bankOrders = [];
                 for (const order of orders) {
                     if (isBankTransfer(order)) {
                         bankCount++;
+                        bankOrders.push(order);
                         continue; // لا تُحتسب ضمن المبيعات المؤكدة
                     }
+                    confirmedCount++; // طلب فريد واحد، بصرف النظر عن عدد المنتجات بداخله
                     for (const prod of order.products) {
                         const key = prod.sku;
                         if (!map[key]) {
@@ -824,13 +876,20 @@
                 const arr = Object.values(map);
                 arr.sort((a, b) => a.productName.localeCompare(b.productName, 'ar'));
                 bankTransferOrderCount = bankCount;
+                confirmedOrderCount = confirmedCount;
+                bankOrders.sort((a, b) => dateSortValue(b.date) - dateSortValue(a.date));
+                bankTransferOrders = bankOrders;
                 return arr;
             }
 
             // ========== Render ==========
             function renderAll(productList) {
                 const totalProducts = productList.length;
-                const totalOrders = productList.reduce((s, p) => s + p.totalOrders, 0);
+                // عدد الطلبات الفريدة ضمن المنتجات المعروضة حالياً (طلب واحد فيه منتجين
+                // من القائمة يُحسب مرة واحدة فقط، وليس بعدد سطور المنتجات)
+                const uniqueOrderIds = new Set();
+                productList.forEach(p => p.orderRefs.forEach(ref => uniqueOrderIds.add(ref.order.orderId)));
+                const totalOrders = uniqueOrderIds.size;
                 const totalQty = productList.reduce((s, p) => s + p.totalQuantity, 0);
                 const totalRev = productList.reduce((s, p) => s + p.totalRevenue, 0);
 
@@ -838,7 +897,10 @@
                 statOrders.textContent = totalOrders;
                 statQuantity.textContent = totalQty;
                 statRevenue.textContent = formatCurrency(totalRev);
-                statBank.textContent = bankTransferOrderCount;
+                const bankPaidCount = bankTransferOrders.filter(hasConfirmedAmount).length;
+                const bankNoAmountCount = bankTransferOrders.length - bankPaidCount;
+                statBankPaid.textContent = bankPaidCount;
+                statBankNoAmount.textContent = bankNoAmountCount;
 
                 statsBar.style.display = 'flex';
                 searchSection.style.display = 'flex';
@@ -937,6 +999,51 @@
                     searchInput.value = sku;
                 }
                 updateSearchHint();
+            }
+
+            // يعرض سجل كل طلبات "تحويل بنكي" ببياناتها وبرامجها، مقسّمة إلى مؤكدة المبلغ
+            // وغير مؤكدة المبلغ، بشكل مستقل تماماً عن قائمة المنتجات/المبيعات المؤكدة.
+            function renderBankSection() {
+                if (bankTransferOrders.length === 0) {
+                    bankSection.classList.remove('visible');
+                    btnExportBank.disabled = true;
+                    btnExportBank2.disabled = true;
+                    return;
+                }
+                bankSection.classList.add('visible');
+                btnExportBank.disabled = false;
+                btnExportBank2.disabled = false;
+
+                const paidCount = bankTransferOrders.filter(hasConfirmedAmount).length;
+                const noAmountCount = bankTransferOrders.length - paidCount;
+                bankSub.textContent =
+                    `عدد التحويلات: ${bankTransferOrders.length} | بمبلغ مؤكد: ${paidCount} | بدون مبلغ: ${noAmountCount}`;
+
+                let html = '';
+                bankTransferOrders.forEach((o, i) => {
+                    const confirmed = hasConfirmedAmount(o);
+                    const badge = confirmed
+                        ? `<span class="status-badge paid">مبلغ مؤكد</span>`
+                        : `<span class="status-badge pending">بدون مبلغ</span>`;
+                    const programNames = o.products.map(p => p.productName).join('، ');
+                    const totalQty = o.products.reduce((s, p) => s + p.quantity, 0);
+                    const orderValue = o.products.reduce((s, p) => s + p.total, 0);
+                    html += `
+                        <tr class="${confirmed ? '' : 'row-pending'}">
+                            <td>${i + 1}</td>
+                            <td>${badge}</td>
+                            <td>${escHtml(o.customerName || '-')}</td>
+                            <td class="text-muted">${escHtml(o.customerEmail || '-')}</td>
+                            <td class="text-muted">${escHtml(formatPhone(o.customerPhone))}</td>
+                            <td>${escHtml(o.orderId)}</td>
+                            <td class="text-muted">${formatDate(o.date)}</td>
+                            <td>${escHtml(programNames || '-')}</td>
+                            <td>${totalQty}</td>
+                            <td class="total-col">${confirmed ? formatCurrency(orderValue) : '— بدون مبلغ —'}</td>
+                        </tr>
+                    `;
+                });
+                bankBody.innerHTML = html;
             }
 
             function updateSearchHint() {
@@ -1062,6 +1169,100 @@
                 });
             }
 
+            // ========== Export Bank Transfer List PDF ==========
+            function generateBankPDF() {
+                if (bankTransferOrders.length === 0) {
+                    alert('لا توجد تحويلات بنكية لتصديرها.');
+                    return;
+                }
+                const container = document.getElementById('pdf-content');
+                container.innerHTML = '';
+                container.style.display = 'block';
+                container.className = 'pdf-export';
+
+                const pageDiv = document.createElement('div');
+                pageDiv.className = 'pdf-page';
+                pageDiv.style.direction = 'rtl';
+
+                const paidCount = bankTransferOrders.filter(hasConfirmedAmount).length;
+                const noAmountCount = bankTransferOrders.length - paidCount;
+
+                const header = document.createElement('div');
+                header.className = 'pdf-header';
+                header.innerHTML = `
+                    <div class="product-name">سجل التحويلات البنكية</div>
+                    <div class="product-meta">عدد التحويلات: ${bankTransferOrders.length} | بمبلغ مؤكد: ${paidCount} | بدون مبلغ: ${noAmountCount}</div>
+                `;
+                pageDiv.appendChild(header);
+
+                const table = document.createElement('table');
+                const thead = document.createElement('thead');
+                thead.innerHTML = `
+                    <tr>
+                        <th>#</th>
+                        <th>حالة المبلغ</th>
+                        <th>اسم العميل</th>
+                        <th>البريد الإلكتروني</th>
+                        <th>الجوال</th>
+                        <th>رقم الطلب</th>
+                        <th>التاريخ</th>
+                        <th>البرنامج / المنتج</th>
+                        <th>الكمية</th>
+                        <th>قيمة الطلب (ر.س)</th>
+                    </tr>
+                `;
+                table.appendChild(thead);
+                const tbody = document.createElement('tbody');
+                bankTransferOrders.forEach((o, i) => {
+                    const confirmed = hasConfirmedAmount(o);
+                    const programNames = o.products.map(p => p.productName).join('، ');
+                    const totalQty = o.products.reduce((s, p) => s + p.quantity, 0);
+                    const orderValue = o.products.reduce((s, p) => s + p.total, 0);
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${i + 1}</td>
+                        <td>${confirmed ? 'مبلغ مؤكد' : 'بدون مبلغ'}</td>
+                        <td>${escHtml(o.customerName || '-')}</td>
+                        <td>${escHtml(o.customerEmail || '-')}</td>
+                        <td>${escHtml(formatPhone(o.customerPhone))}</td>
+                        <td>${escHtml(o.orderId)}</td>
+                        <td>${formatDate(o.date)}</td>
+                        <td>${escHtml(programNames || '-')}</td>
+                        <td>${totalQty}</td>
+                        <td>${confirmed ? formatCurrency(orderValue) : '—'}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+                pageDiv.appendChild(table);
+
+                const footer = document.createElement('div');
+                footer.className = 'pdf-footer';
+                footer.textContent = 'سجل التحويلات البنكية — مستبعد من المبيعات المؤكدة، يحتاج تأكيد يدوي';
+                pageDiv.appendChild(footer);
+
+                container.appendChild(pageDiv);
+
+                const opt = {
+                    margin: [8, 8, 8, 8],
+                    filename: 'سجل_التحويلات_البنكية.pdf',
+                    image: { type: 'jpeg', quality: 0.98 },
+                    html2canvas: { scale: 2, useCORS: true, letterRendering: true, scrollY: 0, windowHeight: 8000 },
+                    jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+                    pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+                };
+
+                html2pdf().set(opt).from(container).save().then(() => {
+                    container.style.display = 'none';
+                    container.innerHTML = '';
+                }).catch((err) => {
+                    console.error(err);
+                    alert('حدث خطأ أثناء إنشاء PDF.');
+                    container.style.display = 'none';
+                    container.innerHTML = '';
+                });
+            }
+
             // ========== Process File ==========
             function processFile(file) {
                 const reader = new FileReader();
@@ -1082,6 +1283,7 @@
 
                         currentSku = null;
                         renderAll(productList);
+                        renderBankSection();
                         loading.style.display = 'none';
                         fileName.textContent = `✅ ${file.name}`;
                         if (productList.length > 0) showDetail(productList[0].sku);
@@ -1125,6 +1327,8 @@
                     generatePDF([productsMap[currentSku]], `تقرير_${productsMap[currentSku].productName}`); });
             btnExportDetail.addEventListener('click', function() { if (currentSku && productsMap[currentSku])
                     generatePDF([productsMap[currentSku]], `تقرير_${productsMap[currentSku].productName}`); });
+            btnExportBank.addEventListener('click', generateBankPDF);
+            btnExportBank2.addEventListener('click', generateBankPDF);
 
             document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { searchInput.value = '';
                     filterProducts('');
