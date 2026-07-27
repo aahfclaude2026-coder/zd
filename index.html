@@ -290,11 +290,18 @@
             background: #fed7d7;
             color: #822727;
         }
+        .status-badge.bank {
+            background: #e9d8fd;
+            color: #553c9a;
+        }
         table tr.row-cancelled td {
             opacity: 0.55;
         }
         table tr.row-pending td {
             background: #fffdf5;
+        }
+        table tr.row-bank td {
+            background: #faf5ff;
         }
         .detail-section {
             background: #fff;
@@ -541,7 +548,7 @@
             <div class="stat-card"><div class="label">الطلبات المؤكدة</div><div class="value" id="statOrders">0</div></div>
             <div class="stat-card"><div class="label">الكميات المؤكدة</div><div class="value" id="statQuantity">0</div></div>
             <div class="stat-card"><div class="label">المبيعات المؤكدة (ر.س)</div><div class="value" id="statRevenue">0</div></div>
-            <div class="stat-card stat-warning" id="statPendingCard"><div class="label">قيد الانتظار / ملغى (غير محتسب)</div><div class="value" id="statPending">0</div></div>
+            <div class="stat-card stat-warning" id="statBankCard"><div class="label">حوالات بنكية (غير محتسبة - تُفرز يدوياً)</div><div class="value" id="statBank">0</div></div>
         </div>
 
         <div class="search-section" id="searchSection" style="display:none;">
@@ -578,13 +585,12 @@
                             <th>رقم الطلب</th>
                             <th>التاريخ</th>
                             <th>طريقة الدفع</th>
-                            <th>الحالة</th>
                             <th>الكمية</th>
                             <th>الإجمالي (ر.س)</th>
                         </tr>
                     </thead>
                     <tbody id="detailBody">
-                        <tr><td colspan="10" style="text-align:center; color:#a0aec0;">📌 اختر منتجاً لعرض التفاصيل</td></tr>
+                        <tr><td colspan="9" style="text-align:center; color:#a0aec0;">📌 اختر منتجاً لعرض التفاصيل</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -607,6 +613,7 @@
             const statOrders = document.getElementById('statOrders');
             const statQuantity = document.getElementById('statQuantity');
             const statRevenue = document.getElementById('statRevenue');
+            const statBank = document.getElementById('statBank');
             const searchSection = document.getElementById('searchSection');
             const searchInput = document.getElementById('searchInput');
             const searchHint = document.getElementById('searchHint');
@@ -626,6 +633,7 @@
             let allOrders = [];
             let productsMap = {};
             let currentSku = null;
+            let bankTransferOrderCount = 0;
 
             // ========== Helpers ==========
             function formatCurrency(v) {
@@ -684,18 +692,10 @@
                 return s;
             }
 
-            // طلب "مؤكد" = تم دفعه فعليًا ولم يُلغَ. أي إشارة صريحة لإلغاء أو عدم دفع تُخرجه من
-            // أرقام المبيعات الرئيسية؛ غياب عمود الحالة كليًا (ملفات لا تتضمنه) لا يُسقط الطلب.
-            function isOrderConfirmed(order) {
-                if (order.orderStatus === 'تم الإلغاء') return false;
-                if (order.paymentStatus && order.paymentStatus !== 'مدفوع') return false;
-                return true;
-            }
-
-            function getStatusBadge(order) {
-                if (order.orderStatus === 'تم الإلغاء') return { label: 'ملغي', cls: 'cancelled' };
-                if (order.paymentStatus === 'غير مدفوع') return { label: 'قيد الانتظار', cls: 'pending' };
-                return { label: 'مدفوع', cls: 'paid' };
+            // طلب "تحويل بنكي" يُستثنى بالكامل من المبيعات المؤكدة لأنه غير موثّق تلقائياً
+            // داخل زد (يحتاج تأكيد يدوي من كشف الحساب البنكي). كل ما عداه (مثل zidpay) يُحتسب.
+            function isBankTransfer(order) {
+                return safeStr(order.paymentMethod) === 'تحويل بنكي';
             }
 
             // ========== Parse Excel ==========
@@ -788,9 +788,17 @@
             }
 
             // ========== Group Orders by Product ==========
+            // ملاحظة مهمة: طلبات "تحويل بنكي" تُستبعد بالكامل من الإحصائيات والمنتجات هنا،
+            // لأنها تحتاج تأكيد يدوي من كشف الحساب البنكي قبل احتسابها كمبيعات مؤكدة.
+            // يتم فقط عدّها (bankTransferOrderCount) لتسهيل فرزها يدوياً لاحقاً.
             function buildProductsFromOrders(orders) {
                 const map = {};
+                let bankCount = 0;
                 for (const order of orders) {
+                    if (isBankTransfer(order)) {
+                        bankCount++;
+                        continue; // لا تُحتسب ضمن المبيعات المؤكدة
+                    }
                     for (const prod of order.products) {
                         const key = prod.sku;
                         if (!map[key]) {
@@ -815,6 +823,7 @@
                 }
                 const arr = Object.values(map);
                 arr.sort((a, b) => a.productName.localeCompare(b.productName, 'ar'));
+                bankTransferOrderCount = bankCount;
                 return arr;
             }
 
@@ -829,6 +838,7 @@
                 statOrders.textContent = totalOrders;
                 statQuantity.textContent = totalQty;
                 statRevenue.textContent = formatCurrency(totalRev);
+                statBank.textContent = bankTransferOrderCount;
 
                 statsBar.style.display = 'flex';
                 searchSection.style.display = 'flex';
@@ -899,7 +909,7 @@
                                 <td>${i + 1}</td>
                                 <td>${escHtml(o.customerName || '-')}</td>
                                 <td class="text-muted">${escHtml(o.customerEmail || '-')}</td>
-                                <td class="text-muted">${escHtml(o.customerPhone || '-')}</td>
+                                <td class="text-muted">${escHtml(formatPhone(o.customerPhone))}</td>
                                 <td>${escHtml(o.orderId)}</td>
                                 <td class="text-muted">${formatDate(o.date)}</td>
                                 <td>${escHtml(o.paymentMethod || '-')}</td>
@@ -1012,7 +1022,7 @@
                             <td>${i + 1}</td>
                             <td>${escHtml(o.customerName || '-')}</td>
                             <td>${escHtml(o.customerEmail || '-')}</td>
-                            <td>${escHtml(o.customerPhone || '-')}</td>
+                            <td>${escHtml(formatPhone(o.customerPhone))}</td>
                             <td>${escHtml(o.orderId)}</td>
                             <td>${formatDate(o.date)}</td>
                             <td>${escHtml(o.paymentMethod || '-')}</td>
@@ -1120,7 +1130,7 @@
                     filterProducts('');
                     searchInput.blur(); } });
 
-            console.log('✅ التطبيق جاهز (بدون عمود حالة الدفع).');
+            console.log('✅ التطبيق جاهز (تحويل بنكي مستبعد من المبيعات المؤكدة).');
         })();
     </script>
 </body>
