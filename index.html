@@ -258,6 +258,44 @@
             font-size: 12px;
             font-weight: 600;
         }
+        .product-card .pending-note {
+            font-size: 12px;
+            color: #b7791f;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+        .stat-card.stat-warning {
+            border-right-color: #dd6b20;
+        }
+        .stat-card.stat-warning .value {
+            color: #c05621;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .status-badge.paid {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        .status-badge.pending {
+            background: #feebc8;
+            color: #7b341e;
+        }
+        .status-badge.cancelled {
+            background: #fed7d7;
+            color: #822727;
+        }
+        table tr.row-cancelled td {
+            opacity: 0.55;
+        }
+        table tr.row-pending td {
+            background: #fffdf5;
+        }
         .detail-section {
             background: #fff;
             border-radius: 16px;
@@ -500,9 +538,10 @@
 
         <div class="stats-bar" id="statsBar" style="display:none;">
             <div class="stat-card"><div class="label">عدد المنتجات</div><div class="value" id="statProducts">0</div></div>
-            <div class="stat-card"><div class="label">إجمالي الطلبات</div><div class="value" id="statOrders">0</div></div>
-            <div class="stat-card"><div class="label">إجمالي الكميات</div><div class="value" id="statQuantity">0</div></div>
-            <div class="stat-card"><div class="label">إجمالي المبيعات (ر.س)</div><div class="value" id="statRevenue">0</div></div>
+            <div class="stat-card"><div class="label">الطلبات المؤكدة</div><div class="value" id="statOrders">0</div></div>
+            <div class="stat-card"><div class="label">الكميات المؤكدة</div><div class="value" id="statQuantity">0</div></div>
+            <div class="stat-card"><div class="label">المبيعات المؤكدة (ر.س)</div><div class="value" id="statRevenue">0</div></div>
+            <div class="stat-card stat-warning" id="statPendingCard"><div class="label">قيد الانتظار / ملغى (غير محتسب)</div><div class="value" id="statPending">0</div></div>
         </div>
 
         <div class="search-section" id="searchSection" style="display:none;">
@@ -539,12 +578,13 @@
                             <th>رقم الطلب</th>
                             <th>التاريخ</th>
                             <th>طريقة الدفع</th>
+                            <th>الحالة</th>
                             <th>الكمية</th>
                             <th>الإجمالي (ر.س)</th>
                         </tr>
                     </thead>
                     <tbody id="detailBody">
-                        <tr><td colspan="9" style="text-align:center; color:#a0aec0;">📌 اختر منتجاً لعرض التفاصيل</td></tr>
+                        <tr><td colspan="10" style="text-align:center; color:#a0aec0;">📌 اختر منتجاً لعرض التفاصيل</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -588,14 +628,43 @@
             let currentSku = null;
 
             // ========== Helpers ==========
-            function formatCurrency(v) { return Number(v).toFixed(2); }
+            function formatCurrency(v) {
+                const n = Number(v) || 0;
+                return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
+
+            // ملف زد يكتب التاريخ كنص ثابت الصيغة "YYYY-MM-DD HH:MM AM/PM" بتوقيت السعودية.
+            // نحلله يدويًا بدل الاعتماد على new Date(string): المتصفحات تختلف في قراءة هذه
+            // الصيغة غير القياسية (Safari تحديدًا قد تفشل)، كما أن new Date() تفسّر الوقت
+            // حسب توقيت جهاز المستخدم لا التوقيت الفعلي المسجل في الملف.
+            function parseOrderDateParts(d) {
+                const s = (d || '').toString().trim();
+                const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+                if (!m) return null;
+                let hour = parseInt(m[4], 10);
+                const ap = (m[6] || '').toUpperCase();
+                if (ap === 'PM' && hour !== 12) hour += 12;
+                if (ap === 'AM' && hour === 12) hour = 0;
+                return {
+                    year: parseInt(m[1], 10),
+                    month: parseInt(m[2], 10),
+                    day: parseInt(m[3], 10),
+                    hour: hour,
+                    minute: parseInt(m[5], 10),
+                };
+            }
+
+            function dateSortValue(d) {
+                const p = parseOrderDateParts(d);
+                if (!p) return 0;
+                return p.year * 100000000 + p.month * 1000000 + p.day * 10000 + p.hour * 100 + p.minute;
+            }
 
             function formatDate(d) {
-                try {
-                    const dt = new Date(d);
-                    if (isNaN(dt.getTime())) return d;
-                    return dt.toLocaleDateString('ar-SA', { year: 'numeric', month: '2-digit', day: '2-digit' });
-                } catch (_) { return d; }
+                const p = parseOrderDateParts(d);
+                if (!p) return d || '-';
+                const pad = n => String(n).padStart(2, '0');
+                return `${pad(p.day)}/${pad(p.month)}/${p.year}`;
             }
 
             function safeStr(v) { return (v || '').toString().trim(); }
@@ -605,6 +674,28 @@
                 const div = document.createElement('div');
                 div.textContent = str;
                 return div.innerHTML;
+            }
+
+            // رقم الجوال في ملفات زد نص كامل مثل 966XXXXXXXXX بدون علامة +، نضيفها للعرض فقط
+            function formatPhone(v) {
+                const s = safeStr(v);
+                if (!s) return '-';
+                if (/^\d{9,15}$/.test(s)) return '+' + s;
+                return s;
+            }
+
+            // طلب "مؤكد" = تم دفعه فعليًا ولم يُلغَ. أي إشارة صريحة لإلغاء أو عدم دفع تُخرجه من
+            // أرقام المبيعات الرئيسية؛ غياب عمود الحالة كليًا (ملفات لا تتضمنه) لا يُسقط الطلب.
+            function isOrderConfirmed(order) {
+                if (order.orderStatus === 'تم الإلغاء') return false;
+                if (order.paymentStatus && order.paymentStatus !== 'مدفوع') return false;
+                return true;
+            }
+
+            function getStatusBadge(order) {
+                if (order.orderStatus === 'تم الإلغاء') return { label: 'ملغي', cls: 'cancelled' };
+                if (order.paymentStatus === 'غير مدفوع') return { label: 'قيد الانتظار', cls: 'pending' };
+                return { label: 'مدفوع', cls: 'paid' };
             }
 
             // ========== Parse Excel ==========
