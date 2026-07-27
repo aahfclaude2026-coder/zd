@@ -589,10 +589,11 @@
                             <th>طريقة الدفع</th>
                             <th>الكمية</th>
                             <th>الإجمالي (ر.س)</th>
+                            <th>إجراء</th>
                         </tr>
                     </thead>
                     <tbody id="detailBody">
-                        <tr><td colspan="9" style="text-align:center; color:#a0aec0;">📌 اختر منتجاً لعرض التفاصيل</td></tr>
+                        <tr><td colspan="10" style="text-align:center; color:#a0aec0;">📌 اختر منتجاً لعرض التفاصيل</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -620,10 +621,11 @@
                             <th>البرنامج / المنتج المسجّل فيه</th>
                             <th>الكمية</th>
                             <th>قيمة الطلب (ر.س)</th>
+                            <th>إجراء</th>
                         </tr>
                     </thead>
                     <tbody id="bankBody">
-                        <tr><td colspan="10" style="text-align:center; color:#a0aec0;">لا توجد تحويلات بنكية بعد. ارفع الملف أولاً.</td></tr>
+                        <tr><td colspan="11" style="text-align:center; color:#a0aec0;">لا توجد تحويلات بنكية بعد. ارفع الملف أولاً.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -675,6 +677,11 @@
             let bankTransferOrderCount = 0;
             let confirmedOrderCount = 0; // عدد الطلبات الفريدة المؤكدة (وليس عدد سطور المنتجات)
             let bankTransferOrders = []; // كل طلبات "تحويل بنكي" كاملة (لعرضها في سجل منفصل)
+            // تصنيف يدوي: بعض الطلبات تُسجَّل في زد بطريقة دفع خاطئة (مثلاً كوبون خصم 100%
+            // يصفّر المبلغ بعد استلام الدفع فعلياً تحويلاً بنكياً خارج النظام). هذا الكائن
+            // يسمح للمستخدم بتصحيح تصنيف أي طلب يدوياً من الواجهة مباشرة.
+            // الصيغة: { orderId: { isBank: true/false, amount: رقم أو null } }
+            let manualBankOverrides = {};
 
             // ========== Helpers ==========
             function formatCurrency(v) {
@@ -736,6 +743,8 @@
             // طلب "تحويل بنكي" يُستثنى بالكامل من المبيعات المؤكدة لأنه غير موثّق تلقائياً
             // داخل زد (يحتاج تأكيد يدوي من كشف الحساب البنكي). كل ما عداه (مثل zidpay) يُحتسب.
             function isBankTransfer(order) {
+                const ov = manualBankOverrides[order.orderId];
+                if (ov !== undefined) return ov.isBank;
                 return safeStr(order.paymentMethod) === 'تحويل بنكي';
             }
 
@@ -743,7 +752,19 @@
             // (Paid Amount = 0)، أي أن العميل ما رفع إثبات الحوالة أو ما تأكد الدفع إدارياً.
             // نفصلها عن التحويلات المؤكد استلام مبلغها لتكون الفلترة اليدوية أدق.
             function hasConfirmedAmount(order) {
+                const ov = manualBankOverrides[order.orderId];
+                if (ov !== undefined && ov.isBank) return (Number(ov.amount) || 0) > 0;
                 return (Number(order.paidAmount) || 0) > 0;
+            }
+
+            // المبلغ المعروض لطلب تحويل بنكي: إما المبلغ اليدوي اللي أدخله المستخدم
+            // (عند التصنيف اليدوي)، أو مجموع سطور المنتجات كما وردت في الملف.
+            function getOrderDisplayAmount(order) {
+                const ov = manualBankOverrides[order.orderId];
+                if (ov !== undefined && ov.isBank && ov.amount !== null && ov.amount !== undefined) {
+                    return ov.amount;
+                }
+                return order.products.reduce((s, p) => s + p.total, 0);
             }
 
             // ========== Parse Excel ==========
@@ -962,7 +983,7 @@
 
                 let bodyHtml = '';
                 if (product.orderRefs.length === 0) {
-                    bodyHtml = `<tr><td colspan="9" style="text-align:center; color:#a0aec0;">⚠️ لا توجد طلبات.</td></tr>`;
+                    bodyHtml = `<tr><td colspan="10" style="text-align:center; color:#a0aec0;">⚠️ لا توجد طلبات.</td></tr>`;
                 } else {
                     product.orderRefs.forEach((ref, i) => {
                         const o = ref.order;
@@ -977,6 +998,7 @@
                                 <td>${escHtml(o.paymentMethod || '-')}</td>
                                 <td>${ref.quantity}</td>
                                 <td class="total-col">${formatCurrency(ref.total)}</td>
+                                <td><button class="btn btn-outline" style="color:#c05621; border-color:#dd6b20; padding:4px 10px; font-size:12px;" onclick="window.toggleBankOverride('${escHtml(o.orderId)}')">🏦 وسمها تحويل بنكي</button></td>
                             </tr>
                         `;
                     });
@@ -1022,16 +1044,18 @@
                 let html = '';
                 bankTransferOrders.forEach((o, i) => {
                     const confirmed = hasConfirmedAmount(o);
+                    const isManual = manualBankOverrides[o.orderId] !== undefined;
                     const badge = confirmed
                         ? `<span class="status-badge paid">مبلغ مؤكد</span>`
                         : `<span class="status-badge pending">بدون مبلغ</span>`;
+                    const manualTag = isManual ? ` <span class="status-badge bank">يدوي</span>` : '';
                     const programNames = o.products.map(p => p.productName).join('، ');
                     const totalQty = o.products.reduce((s, p) => s + p.quantity, 0);
-                    const orderValue = o.products.reduce((s, p) => s + p.total, 0);
+                    const orderValue = getOrderDisplayAmount(o);
                     html += `
                         <tr class="${confirmed ? '' : 'row-pending'}">
                             <td>${i + 1}</td>
-                            <td>${badge}</td>
+                            <td>${badge}${manualTag}</td>
                             <td>${escHtml(o.customerName || '-')}</td>
                             <td class="text-muted">${escHtml(o.customerEmail || '-')}</td>
                             <td class="text-muted">${escHtml(formatPhone(o.customerPhone))}</td>
@@ -1040,11 +1064,47 @@
                             <td>${escHtml(programNames || '-')}</td>
                             <td>${totalQty}</td>
                             <td class="total-col">${confirmed ? formatCurrency(orderValue) : '— بدون مبلغ —'}</td>
+                            <td><button class="btn btn-outline" style="color:#2b6cb0; border-color:#2b6cb0; padding:4px 10px; font-size:12px;" onclick="window.toggleBankOverride('${escHtml(o.orderId)}')">↩️ إرجاعها ضمن المبيعات</button></td>
                         </tr>
                     `;
                 });
                 bankBody.innerHTML = html;
             }
+
+            // يعيد بناء كل الحسابات والعرض بعد أي تصنيف يدوي (تحويل بنكي <-> مبيعات مؤكدة)
+            // دون الحاجة لإعادة رفع الملف، مع الحفاظ على أي فلترة/بحث حالي.
+            function rebuildAfterOverride() {
+                const productList = buildProductsFromOrders(allOrders);
+                productsMap = {};
+                for (const p of productList) productsMap[p.sku] = p;
+                if (!(currentSku && productsMap[currentSku])) {
+                    currentSku = productList.length ? productList[0].sku : null;
+                }
+                filterProducts(searchInput.value || '');
+                renderBankSection();
+            }
+
+            // يبدّل تصنيف طلب معيّن بين "تحويل بنكي" و"مبيعات مؤكدة" يدوياً.
+            // عند التحويل إلى تحويل بنكي يطلب من المستخدم إدخال المبلغ الفعلي المستلم
+            // (مفيد للحالات اللي فيها كوبون خصم صفّر المبلغ في النظام رغم استلام الدفع فعلياً).
+            window.toggleBankOverride = function(orderId) {
+                const order = allOrders.find(o => o.orderId === orderId);
+                if (!order) return;
+                const currentlyBank = isBankTransfer(order);
+                if (currentlyBank) {
+                    delete manualBankOverrides[orderId];
+                } else {
+                    const defaultAmt = order.products.reduce((s, p) => s + p.total, 0);
+                    const input = window.prompt(
+                        'أدخل المبلغ الفعلي المستلم عبر التحويل البنكي لهذا الطلب (ر.س):\nمثال: لو فيه كوبون خصم 100% صفّر المبلغ بالنظام، اكتب المبلغ الحقيقي اللي استلمتوه.',
+                        defaultAmt
+                    );
+                    if (input === null) return;
+                    const amt = parseFloat(input);
+                    manualBankOverrides[orderId] = { isBank: true, amount: isNaN(amt) ? 0 : amt };
+                }
+                rebuildAfterOverride();
+            };
 
             function updateSearchHint() {
                 const count = Object.keys(productsMap).length;
@@ -1217,7 +1277,7 @@
                     const confirmed = hasConfirmedAmount(o);
                     const programNames = o.products.map(p => p.productName).join('، ');
                     const totalQty = o.products.reduce((s, p) => s + p.quantity, 0);
-                    const orderValue = o.products.reduce((s, p) => s + p.total, 0);
+                    const orderValue = getOrderDisplayAmount(o);
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>${i + 1}</td>
@@ -1277,6 +1337,7 @@
                             return;
                         }
                         allOrders = orders;
+                        manualBankOverrides = {};
                         const productList = buildProductsFromOrders(orders);
                         productsMap = {};
                         for (const p of productList) productsMap[p.sku] = p;
