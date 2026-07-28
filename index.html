@@ -312,6 +312,10 @@
             display: none;
             border-top: 6px solid #2b6cb0;
         }
+        #bankSection {
+            border-top-color: #dd6b20;
+            background: #fffdf8;
+        }
         .detail-section.visible {
             display: block;
             animation: fadeSlide 0.3s ease;
@@ -527,7 +531,6 @@
             <div class="header-actions">
                 <button class="btn btn-outline" id="btnExportAll" disabled>📄 تصدير الكل</button>
                 <button class="btn btn-outline" id="btnExportCurrent" disabled>📄 تصدير المحدد</button>
-                <button class="btn btn-outline" id="btnExportBank" disabled>🏦 تصدير التحويلات البنكية</button>
             </div>
         </div>
 
@@ -549,8 +552,11 @@
             <div class="stat-card"><div class="label">الطلبات المؤكدة</div><div class="value" id="statOrders">0</div></div>
             <div class="stat-card"><div class="label">الكميات المؤكدة</div><div class="value" id="statQuantity">0</div></div>
             <div class="stat-card"><div class="label">المبيعات المؤكدة (ر.س)</div><div class="value" id="statRevenue">0</div></div>
-            <div class="stat-card stat-warning" id="statBankPaidCard"><div class="label">حوالات بنكية بمبلغ مؤكد (غير محتسبة بالمبيعات)</div><div class="value" id="statBankPaid">0</div></div>
-            <div class="stat-card stat-warning" id="statBankNoAmountCard"><div class="label">حوالات بنكية بدون مبلغ (لم يُرفع إثبات الدفع)</div><div class="value" id="statBankNoAmount">0</div></div>
+            <div class="stat-card stat-warning" id="statBankCard" style="cursor:pointer;" title="اضغط للانتقال إلى سجل التحويلات البنكية بالأسفل">
+                <div class="label">🏦 تحويلات بنكية (مستبعدة من المبيعات) ⬇</div>
+                <div class="value" id="statBank">0</div>
+                <div class="label" id="statBankBreakdown" style="margin-top:2px;"></div>
+            </div>
         </div>
 
         <div class="search-section" id="searchSection" style="display:none;">
@@ -648,12 +654,11 @@
             const statOrders = document.getElementById('statOrders');
             const statQuantity = document.getElementById('statQuantity');
             const statRevenue = document.getElementById('statRevenue');
-            const statBankPaid = document.getElementById('statBankPaid');
-            const statBankNoAmount = document.getElementById('statBankNoAmount');
+            const statBank = document.getElementById('statBank');
+            const statBankCard = document.getElementById('statBankCard');
             const bankSection = document.getElementById('bankSection');
             const bankSub = document.getElementById('bankSub');
             const bankBody = document.getElementById('bankBody');
-            const btnExportBank = document.getElementById('btnExportBank');
             const btnExportBank2 = document.getElementById('btnExportBank2');
             const searchSection = document.getElementById('searchSection');
             const searchInput = document.getElementById('searchInput');
@@ -920,8 +925,10 @@
                 statRevenue.textContent = formatCurrency(totalRev);
                 const bankPaidCount = bankTransferOrders.filter(hasConfirmedAmount).length;
                 const bankNoAmountCount = bankTransferOrders.length - bankPaidCount;
-                statBankPaid.textContent = bankPaidCount;
-                statBankNoAmount.textContent = bankNoAmountCount;
+                statBank.textContent = bankTransferOrders.length;
+                statBank.title = `بمبلغ مؤكد: ${bankPaidCount} | بدون مبلغ: ${bankNoAmountCount}`;
+                document.getElementById('statBankBreakdown').textContent =
+                    bankTransferOrders.length > 0 ? `(${bankPaidCount} بمبلغ / ${bankNoAmountCount} بدون مبلغ)` : '';
 
                 statsBar.style.display = 'flex';
                 searchSection.style.display = 'flex';
@@ -1028,12 +1035,10 @@
             function renderBankSection() {
                 if (bankTransferOrders.length === 0) {
                     bankSection.classList.remove('visible');
-                    btnExportBank.disabled = true;
                     btnExportBank2.disabled = true;
                     return;
                 }
                 bankSection.classList.add('visible');
-                btnExportBank.disabled = false;
                 btnExportBank2.disabled = false;
 
                 const paidCount = bankTransferOrders.filter(hasConfirmedAmount).length;
@@ -1388,8 +1393,12 @@
                     generatePDF([productsMap[currentSku]], `تقرير_${productsMap[currentSku].productName}`); });
             btnExportDetail.addEventListener('click', function() { if (currentSku && productsMap[currentSku])
                     generatePDF([productsMap[currentSku]], `تقرير_${productsMap[currentSku].productName}`); });
-            btnExportBank.addEventListener('click', generateBankPDF);
             btnExportBank2.addEventListener('click', generateBankPDF);
+            statBankCard.addEventListener('click', function() {
+                if (bankSection.classList.contains('visible')) {
+                    bankSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
 
             document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { searchInput.value = '';
                     filterProducts('');
