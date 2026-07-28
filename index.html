@@ -539,7 +539,7 @@
             <h3>ارفع ملف إكسل (Excel) من منصة زد</h3>
             <p>اسحب الملف هنا أو اضغط للاختيار</p>
             <div class="file-name" id="fileName"></div>
-            <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+            <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.ods">
         </div>
 
         <div class="loading" id="loading">
@@ -553,7 +553,7 @@
             <div class="stat-card"><div class="label">الكميات المؤكدة</div><div class="value" id="statQuantity">0</div></div>
             <div class="stat-card"><div class="label">المبيعات المؤكدة (ر.س)</div><div class="value" id="statRevenue">0</div></div>
             <div class="stat-card stat-warning" id="statBankCard" style="cursor:pointer;" title="اضغط للانتقال إلى سجل التحويلات البنكية بالأسفل">
-                <div class="label">🏦 تحويلات بنكية (مستبعدة من المبيعات) ⬇</div>
+                <div class="label">🏦 طلبات مستبعدة (تحويل بنكي/ملغاة) ⬇</div>
                 <div class="value" id="statBank">0</div>
                 <div class="label" id="statBankBreakdown" style="margin-top:2px;"></div>
             </div>
@@ -608,17 +608,18 @@
         <div class="detail-section" id="bankSection">
             <div class="detail-header">
                 <div>
-                    <div class="title">🏦 سجل التحويلات البنكية <span style="font-size:14px; font-weight:400; color:#dd6b20;">(مستبعدة من المبيعات المؤكدة - تحتاج تأكيد يدوي)</span></div>
-                    <div class="sub-info" id="bankSub">عدد التحويلات: 0 | بمبلغ مؤكد: 0 | بدون مبلغ: 0</div>
+                    <div class="title">🏦 طلبات مستبعدة من المبيعات المؤكدة <span style="font-size:14px; font-weight:400; color:#dd6b20;">(تحويل بنكي أو ملغاة - تحتاج مراجعة يدوية)</span></div>
+                    <div class="sub-info" id="bankSub">عدد الطلبات: 0 | بمبلغ مؤكد: 0 | بدون مبلغ (قيد المراجعة): 0 | ملغاة: 0</div>
                 </div>
-                <button class="btn btn-success" id="btnExportBank2">📄 تصدير التحويلات البنكية</button>
+                <button class="btn btn-success" id="btnExportBank2">📄 تصدير القائمة</button>
             </div>
             <div class="table-wrap">
                 <table>
                     <thead>
                         <tr>
                             <th>#</th>
-                            <th>حالة المبلغ</th>
+                            <th>الحالة</th>
+                            <th>السبب</th>
                             <th>اسم العميل</th>
                             <th>البريد الإلكتروني</th>
                             <th>الجوال</th>
@@ -631,7 +632,7 @@
                         </tr>
                     </thead>
                     <tbody id="bankBody">
-                        <tr><td colspan="11" style="text-align:center; color:#a0aec0;">لا توجد تحويلات بنكية بعد. ارفع الملف أولاً.</td></tr>
+                        <tr><td colspan="12" style="text-align:center; color:#a0aec0;">لا توجد طلبات مستبعدة بعد. ارفع الملف أولاً.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -753,10 +754,17 @@
                 return safeStr(order.paymentMethod) === 'تحويل بنكي';
             }
 
+            // حالة "تم الإلغاء" تُقرأ من سطر الطلب نفسه (Order)، وتختلف عن حالة الدفع.
+            // أي طلب ملغي يُستبعد من المبيعات المؤكدة بغض النظر عن طريقة الدفع أو المبلغ.
+            function isCancelled(order) {
+                return safeStr(order.orderStatus) === 'تم الإلغاء';
+            }
+
             // بعض طلبات "تحويل بنكي" تُنشأ في زد لكن ما ورد لها مبلغ مدفوع مؤكد بعد
             // (Paid Amount = 0)، أي أن العميل ما رفع إثبات الحوالة أو ما تأكد الدفع إدارياً.
             // نفصلها عن التحويلات المؤكد استلام مبلغها لتكون الفلترة اليدوية أدق.
             function hasConfirmedAmount(order) {
+                if (isCancelled(order)) return false; // الطلب الملغي لا يُعتبر مبلغه مؤكداً أبداً
                 const ov = manualBankOverrides[order.orderId];
                 if (ov !== undefined && ov.isBank) return (Number(ov.amount) || 0) > 0;
                 return (Number(order.paidAmount) || 0) > 0;
@@ -824,6 +832,7 @@
                             customerPhone: safeStr(row[col.customerPhone]),
                             paymentMethod: 'غير محدد',
                             paidAmount: 0,
+                            orderStatus: '', // حالة الطلب نفسه (جديد / تم الإلغاء) - تُقرأ فقط من سطر "Order"
                             products: [],
                             totalOrderAmount: 0,
                         };
@@ -831,6 +840,14 @@
 
                     const order = orderMap[id];
                     const lt = safeStr(row[col.lineType]);
+
+                    // مهم: عمود "الحالة" له معنيان مختلفان حسب نوع السطر في ملف زد:
+                    // - في سطر "Order": حالة الطلب نفسه (جديد / تم الإلغاء)
+                    // - في سطر "Payment": حالة الدفع (مدفوع / غير مدفوع)
+                    // خلطهما ببعض كان يسبب عدم استبعاد الطلبات الملغاة من الحسابات.
+                    if (lt === 'Order') {
+                        order.orderStatus = safeStr(row[col.status]);
+                    }
 
                     // قراءة طريقة الدفع من Order أو Payment
                     if (lt === 'Order' || lt === 'Payment') {
@@ -871,7 +888,9 @@
                 let confirmedCount = 0;
                 const bankOrders = [];
                 for (const order of orders) {
-                    if (isBankTransfer(order)) {
+                    // أي طلب "تحويل بنكي" أو "ملغي" (بغض النظر عن طريقة الدفع) يُستبعد
+                    // بالكامل من المبيعات المؤكدة، ويُعرض في سجل الطلبات المستبعدة بالأسفل.
+                    if (isBankTransfer(order) || isCancelled(order)) {
                         bankCount++;
                         bankOrders.push(order);
                         continue; // لا تُحتسب ضمن المبيعات المؤكدة
@@ -923,12 +942,13 @@
                 statOrders.textContent = totalOrders;
                 statQuantity.textContent = totalQty;
                 statRevenue.textContent = formatCurrency(totalRev);
-                const bankPaidCount = bankTransferOrders.filter(hasConfirmedAmount).length;
-                const bankNoAmountCount = bankTransferOrders.length - bankPaidCount;
+                const bankCancelledCount = bankTransferOrders.filter(isCancelled).length;
+                const bankPaidCount = bankTransferOrders.filter(o => !isCancelled(o) && hasConfirmedAmount(o)).length;
+                const bankNoAmountCount = bankTransferOrders.length - bankPaidCount - bankCancelledCount;
                 statBank.textContent = bankTransferOrders.length;
-                statBank.title = `بمبلغ مؤكد: ${bankPaidCount} | بدون مبلغ: ${bankNoAmountCount}`;
+                statBank.title = `بمبلغ مؤكد: ${bankPaidCount} | بدون مبلغ (قيد المراجعة): ${bankNoAmountCount} | ملغاة: ${bankCancelledCount}`;
                 document.getElementById('statBankBreakdown').textContent =
-                    bankTransferOrders.length > 0 ? `(${bankPaidCount} بمبلغ / ${bankNoAmountCount} بدون مبلغ)` : '';
+                    bankTransferOrders.length > 0 ? `(${bankPaidCount} بمبلغ / ${bankNoAmountCount} قيد المراجعة / ${bankCancelledCount} ملغاة)` : '';
 
                 statsBar.style.display = 'flex';
                 searchSection.style.display = 'flex';
@@ -1041,26 +1061,38 @@
                 bankSection.classList.add('visible');
                 btnExportBank2.disabled = false;
 
-                const paidCount = bankTransferOrders.filter(hasConfirmedAmount).length;
-                const noAmountCount = bankTransferOrders.length - paidCount;
+                const cancelledCount = bankTransferOrders.filter(isCancelled).length;
+                const paidCount = bankTransferOrders.filter(o => !isCancelled(o) && hasConfirmedAmount(o)).length;
+                const noAmountCount = bankTransferOrders.length - paidCount - cancelledCount;
                 bankSub.textContent =
-                    `عدد التحويلات: ${bankTransferOrders.length} | بمبلغ مؤكد: ${paidCount} | بدون مبلغ: ${noAmountCount}`;
+                    `عدد الطلبات: ${bankTransferOrders.length} | بمبلغ مؤكد: ${paidCount} | بدون مبلغ (قيد المراجعة): ${noAmountCount} | ملغاة: ${cancelledCount}`;
 
                 let html = '';
                 bankTransferOrders.forEach((o, i) => {
+                    const cancelled = isCancelled(o);
                     const confirmed = hasConfirmedAmount(o);
                     const isManual = manualBankOverrides[o.orderId] !== undefined;
-                    const badge = confirmed
-                        ? `<span class="status-badge paid">مبلغ مؤكد</span>`
-                        : `<span class="status-badge pending">بدون مبلغ</span>`;
+                    let badge;
+                    if (cancelled) {
+                        badge = `<span class="status-badge cancelled">ملغي</span>`;
+                    } else if (confirmed) {
+                        badge = `<span class="status-badge paid">مبلغ مؤكد</span>`;
+                    } else {
+                        badge = `<span class="status-badge pending">بدون مبلغ</span>`;
+                    }
                     const manualTag = isManual ? ` <span class="status-badge bank">يدوي</span>` : '';
+                    const reasons = [];
+                    if (isBankTransfer(o)) reasons.push('تحويل بنكي');
+                    if (cancelled) reasons.push('ملغي');
                     const programNames = o.products.map(p => p.productName).join('، ');
                     const totalQty = o.products.reduce((s, p) => s + p.quantity, 0);
                     const orderValue = getOrderDisplayAmount(o);
+                    const rowClass = cancelled ? 'row-cancelled' : (confirmed ? '' : 'row-pending');
                     html += `
-                        <tr class="${confirmed ? '' : 'row-pending'}">
+                        <tr class="${rowClass}">
                             <td>${i + 1}</td>
                             <td>${badge}${manualTag}</td>
+                            <td class="text-muted">${escHtml(reasons.join('، ') || '-')}</td>
                             <td>${escHtml(o.customerName || '-')}</td>
                             <td class="text-muted">${escHtml(o.customerEmail || '-')}</td>
                             <td class="text-muted">${escHtml(formatPhone(o.customerPhone))}</td>
@@ -1068,8 +1100,8 @@
                             <td class="text-muted">${formatDate(o.date)}</td>
                             <td>${escHtml(programNames || '-')}</td>
                             <td>${totalQty}</td>
-                            <td class="total-col">${confirmed ? formatCurrency(orderValue) : '— بدون مبلغ —'}</td>
-                            <td><button class="btn btn-outline" style="color:#2b6cb0; border-color:#2b6cb0; padding:4px 10px; font-size:12px;" onclick="window.toggleBankOverride('${escHtml(o.orderId)}')">↩️ إرجاعها ضمن المبيعات</button></td>
+                            <td class="total-col">${confirmed ? formatCurrency(orderValue) : (cancelled ? '— ملغي —' : '— بدون مبلغ —')}</td>
+                            <td>${cancelled ? '<span class="text-muted">لا يحتاج إجراء</span>' : `<button class="btn btn-outline" style="color:#2b6cb0; border-color:#2b6cb0; padding:4px 10px; font-size:12px;" onclick="window.toggleBankOverride('${escHtml(o.orderId)}')">↩️ إرجاعها ضمن المبيعات</button>`}</td>
                         </tr>
                     `;
                 });
@@ -1237,7 +1269,7 @@
             // ========== Export Bank Transfer List PDF ==========
             function generateBankPDF() {
                 if (bankTransferOrders.length === 0) {
-                    alert('لا توجد تحويلات بنكية لتصديرها.');
+                    alert('لا توجد طلبات مستبعدة لتصديرها.');
                     return;
                 }
                 const container = document.getElementById('pdf-content');
@@ -1249,14 +1281,15 @@
                 pageDiv.className = 'pdf-page';
                 pageDiv.style.direction = 'rtl';
 
-                const paidCount = bankTransferOrders.filter(hasConfirmedAmount).length;
-                const noAmountCount = bankTransferOrders.length - paidCount;
+                const cancelledCount = bankTransferOrders.filter(isCancelled).length;
+                const paidCount = bankTransferOrders.filter(o => !isCancelled(o) && hasConfirmedAmount(o)).length;
+                const noAmountCount = bankTransferOrders.length - paidCount - cancelledCount;
 
                 const header = document.createElement('div');
                 header.className = 'pdf-header';
                 header.innerHTML = `
-                    <div class="product-name">سجل التحويلات البنكية</div>
-                    <div class="product-meta">عدد التحويلات: ${bankTransferOrders.length} | بمبلغ مؤكد: ${paidCount} | بدون مبلغ: ${noAmountCount}</div>
+                    <div class="product-name">طلبات مستبعدة من المبيعات المؤكدة</div>
+                    <div class="product-meta">عدد الطلبات: ${bankTransferOrders.length} | بمبلغ مؤكد: ${paidCount} | بدون مبلغ (قيد المراجعة): ${noAmountCount} | ملغاة: ${cancelledCount}</div>
                 `;
                 pageDiv.appendChild(header);
 
@@ -1265,7 +1298,8 @@
                 thead.innerHTML = `
                     <tr>
                         <th>#</th>
-                        <th>حالة المبلغ</th>
+                        <th>الحالة</th>
+                        <th>السبب</th>
                         <th>اسم العميل</th>
                         <th>البريد الإلكتروني</th>
                         <th>الجوال</th>
@@ -1279,14 +1313,20 @@
                 table.appendChild(thead);
                 const tbody = document.createElement('tbody');
                 bankTransferOrders.forEach((o, i) => {
+                    const cancelled = isCancelled(o);
                     const confirmed = hasConfirmedAmount(o);
+                    const statusLabel = cancelled ? 'ملغي' : (confirmed ? 'مبلغ مؤكد' : 'بدون مبلغ');
+                    const reasons = [];
+                    if (isBankTransfer(o)) reasons.push('تحويل بنكي');
+                    if (cancelled) reasons.push('ملغي');
                     const programNames = o.products.map(p => p.productName).join('، ');
                     const totalQty = o.products.reduce((s, p) => s + p.quantity, 0);
                     const orderValue = getOrderDisplayAmount(o);
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td>${i + 1}</td>
-                        <td>${confirmed ? 'مبلغ مؤكد' : 'بدون مبلغ'}</td>
+                        <td>${statusLabel}</td>
+                        <td>${escHtml(reasons.join('، ') || '-')}</td>
                         <td>${escHtml(o.customerName || '-')}</td>
                         <td>${escHtml(o.customerEmail || '-')}</td>
                         <td>${escHtml(formatPhone(o.customerPhone))}</td>
@@ -1303,7 +1343,7 @@
 
                 const footer = document.createElement('div');
                 footer.className = 'pdf-footer';
-                footer.textContent = 'سجل التحويلات البنكية — مستبعد من المبيعات المؤكدة، يحتاج تأكيد يدوي';
+                footer.textContent = 'طلبات مستبعدة من المبيعات المؤكدة (تحويل بنكي أو ملغاة) — تحتاج مراجعة يدوية';
                 pageDiv.appendChild(footer);
 
                 container.appendChild(pageDiv);
